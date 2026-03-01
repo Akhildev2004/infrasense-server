@@ -8,11 +8,14 @@ CORS(app)
 DEVICE_ID = "INFRA-001"
 ZONE = "Column_A1"
 
-ALERTS = []
 HISTORY = []
 LATEST_DATA = None
 LAST_UPDATE_TIME = None
 OFFLINE_THRESHOLD = 15  # seconds
+
+# 🔹 New Alert Structures
+ACTIVE_ALERTS = {}
+ALERT_HISTORY = []
 
 
 def evaluate_overall(data):
@@ -74,11 +77,12 @@ def receive_device_data():
         humidity = float(request.args.get("value5"))
 
         now = datetime.datetime.now()
+        now_iso = now.isoformat()
 
         LATEST_DATA = {
             "device_id": DEVICE_ID,
             "zone": ZONE,
-            "timestamp": now.isoformat(),
+            "timestamp": now_iso,
             "strain": strain,
             "vibration": vibration,
             "temperature": temperature,
@@ -88,9 +92,9 @@ def receive_device_data():
 
         LAST_UPDATE_TIME = now
 
-        # ✅ History updated ONLY when device sends data
+        # 🔹 Save History (unchanged logic)
         HISTORY.append({
-            "time": now.isoformat(),
+            "time": now_iso,
             "strain": strain,
             "vibration": vibration,
             "temperature": temperature,
@@ -101,18 +105,27 @@ def receive_device_data():
         if len(HISTORY) > 100:
             HISTORY.pop(0)
 
-        # Update alerts here also
+        # 🔹 Event-Based Alert Logic
         overall, param_status = evaluate_overall(LATEST_DATA)
-        ALERTS.clear()
+
         for param, stat in param_status.items():
+
+            # If abnormal and not already active → create alert
             if stat != "SAFE":
-                ALERTS.append({
-                    "zone": ZONE,
-                    "parameter": param,
-                    "severity": stat,
-                    "value": LATEST_DATA[param],
-                    "time": now.isoformat()
-                })
+                if param not in ACTIVE_ALERTS:
+                    ACTIVE_ALERTS[param] = {
+                        "parameter": param,
+                        "severity": stat,
+                        "start_time": now_iso,
+                        "zone": ZONE
+                    }
+
+            # If SAFE and was active → resolve alert
+            else:
+                if param in ACTIVE_ALERTS:
+                    resolved_alert = ACTIVE_ALERTS.pop(param)
+                    resolved_alert["end_time"] = now_iso
+                    ALERT_HISTORY.append(resolved_alert)
 
     except (TypeError, ValueError):
         return jsonify({"error": "Invalid or missing sensor values"}), 400
@@ -133,8 +146,8 @@ def live_data():
     device_status = "ONLINE"
 
     if LAST_UPDATE_TIME:
-        time_diff = (datetime.datetime.now() - LAST_UPDATE_TIME).total_seconds()
-        if time_diff > OFFLINE_THRESHOLD:
+        diff = (datetime.datetime.now() - LAST_UPDATE_TIME).total_seconds()
+        if diff > OFFLINE_THRESHOLD:
             device_status = "OFFLINE"
 
     overall, param_status = evaluate_overall(LATEST_DATA)
@@ -149,9 +162,16 @@ def live_data():
     })
 
 
+# 🔹 Active Alerts Endpoint
 @app.route("/api/alerts", methods=["GET"])
-def get_alerts():
-    return jsonify(ALERTS)
+def get_active_alerts():
+    return jsonify(list(ACTIVE_ALERTS.values()))
+
+
+# 🔹 Alert History Endpoint (Resolved Alerts)
+@app.route("/api/alert-history", methods=["GET"])
+def get_alert_history():
+    return jsonify(ALERT_HISTORY)
 
 
 @app.route("/api/history", methods=["GET"])
