@@ -1,20 +1,10 @@
-from flask import Flask, jsonify, Response, request
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 import datetime
-import csv
-import io
-from reportlab.lib.pagesizes import A4
-from reportlab.pdfgen import canvas
 
-# -----------------------------
-# APP SETUP
-# -----------------------------
 app = Flask(__name__)
 CORS(app)
 
-# -----------------------------
-# GLOBAL VARIABLES
-# -----------------------------
 DEVICE_ID = "INFRA-001"
 ZONE = "Column_A1"
 
@@ -24,13 +14,10 @@ LATEST_DATA = None
 LAST_UPDATE_TIME = None
 OFFLINE_THRESHOLD = 15  # seconds
 
-# -----------------------------
-# STATUS EVALUATION
-# -----------------------------
+
 def evaluate_overall(data):
     status = {}
 
-    # Strain (µε)
     if data["strain"] < 250:
         status["strain"] = "SAFE"
     elif data["strain"] < 350:
@@ -38,7 +25,6 @@ def evaluate_overall(data):
     else:
         status["strain"] = "CRITICAL"
 
-    # Vibration (g)
     if data["vibration"] < 0.05:
         status["vibration"] = "SAFE"
     elif data["vibration"] < 0.08:
@@ -46,7 +32,6 @@ def evaluate_overall(data):
     else:
         status["vibration"] = "CRITICAL"
 
-    # Temperature (°C)
     if data["temperature"] < 35:
         status["temperature"] = "SAFE"
     elif data["temperature"] < 45:
@@ -54,7 +39,6 @@ def evaluate_overall(data):
     else:
         status["temperature"] = "CRITICAL"
 
-    # Humidity (%)
     if data["humidity"] < 70:
         status["humidity"] = "SAFE"
     elif data["humidity"] < 85:
@@ -62,7 +46,6 @@ def evaluate_overall(data):
     else:
         status["humidity"] = "CRITICAL"
 
-    # Crack width (mm)
     if data["crack"] < 0.3:
         status["crack"] = "SAFE"
     elif data["crack"] < 0.5:
@@ -79,9 +62,6 @@ def evaluate_overall(data):
     return overall, status
 
 
-# -----------------------------
-# DEVICE DATA INGEST (ESP)
-# -----------------------------
 @app.route("/api/device", methods=["GET", "POST"])
 def receive_device_data():
     global LATEST_DATA, LAST_UPDATE_TIME
@@ -93,10 +73,12 @@ def receive_device_data():
         vibration = float(request.args.get("value4"))
         humidity = float(request.args.get("value5"))
 
+        now = datetime.datetime.now()
+
         LATEST_DATA = {
             "device_id": DEVICE_ID,
             "zone": ZONE,
-            "timestamp": datetime.datetime.now().isoformat(),
+            "timestamp": now.isoformat(),
             "strain": strain,
             "vibration": vibration,
             "temperature": temperature,
@@ -104,7 +86,33 @@ def receive_device_data():
             "crack": crack
         }
 
-        LAST_UPDATE_TIME = datetime.datetime.now()
+        LAST_UPDATE_TIME = now
+
+        # ✅ History updated ONLY when device sends data
+        HISTORY.append({
+            "time": now.isoformat(),
+            "strain": strain,
+            "vibration": vibration,
+            "temperature": temperature,
+            "humidity": humidity,
+            "crack": crack
+        })
+
+        if len(HISTORY) > 100:
+            HISTORY.pop(0)
+
+        # Update alerts here also
+        overall, param_status = evaluate_overall(LATEST_DATA)
+        ALERTS.clear()
+        for param, stat in param_status.items():
+            if stat != "SAFE":
+                ALERTS.append({
+                    "zone": ZONE,
+                    "parameter": param,
+                    "severity": stat,
+                    "value": LATEST_DATA[param],
+                    "time": now.isoformat()
+                })
 
     except (TypeError, ValueError):
         return jsonify({"error": "Invalid or missing sensor values"}), 400
@@ -112,59 +120,28 @@ def receive_device_data():
     return jsonify({"status": "data received"})
 
 
-# -----------------------------
-# LIVE DATA API
-# -----------------------------
 @app.route("/api/live", methods=["GET"])
 def live_data():
     global LATEST_DATA, LAST_UPDATE_TIME
 
-    # If no data ever received
     if LATEST_DATA is None:
         return jsonify({
             "device_status": "WAITING",
             "error": "No device data received yet"
-        }), 200
+        })
 
-    # Check offline condition
     device_status = "ONLINE"
 
-    if LAST_UPDATE_TIME is not None:
+    if LAST_UPDATE_TIME:
         time_diff = (datetime.datetime.now() - LAST_UPDATE_TIME).total_seconds()
         if time_diff > OFFLINE_THRESHOLD:
             device_status = "OFFLINE"
 
-    data = LATEST_DATA
-    overall, param_status = evaluate_overall(data)
-
-    # Only update alerts & history if ONLINE
-    if device_status == "ONLINE":
-        ALERTS.clear()
-        for param, stat in param_status.items():
-            if stat != "SAFE":
-                ALERTS.append({
-                    "zone": data["zone"],
-                    "parameter": param,
-                    "severity": stat,
-                    "value": data[param],
-                    "time": data["timestamp"]
-                })
-
-        HISTORY.append({
-            "time": data["timestamp"],
-            "strain": data["strain"],
-            "vibration": data["vibration"],
-            "temperature": data["temperature"],
-            "humidity": data["humidity"],
-            "crack": data["crack"]
-        })
-
-        if len(HISTORY) > 100:
-            HISTORY.pop(0)
+    overall, param_status = evaluate_overall(LATEST_DATA)
 
     return jsonify({
         "device_status": device_status,
-        "data": data,
+        "data": LATEST_DATA,
         "status": {
             "overall": overall,
             "parameters": param_status
@@ -172,25 +149,16 @@ def live_data():
     })
 
 
-# -----------------------------
-# ALERTS API
-# -----------------------------
 @app.route("/api/alerts", methods=["GET"])
 def get_alerts():
     return jsonify(ALERTS)
 
 
-# -----------------------------
-# HISTORY API
-# -----------------------------
 @app.route("/api/history", methods=["GET"])
 def get_history():
     return jsonify(HISTORY)
 
 
-# -----------------------------
-# SIMPLE AI REPORT
-# -----------------------------
 @app.route("/api/report", methods=["GET"])
 def get_report():
     if not HISTORY:
@@ -229,8 +197,5 @@ def get_report():
     })
 
 
-# -----------------------------
-# RUN SERVER
-# -----------------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
