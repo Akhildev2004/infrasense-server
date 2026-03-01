@@ -1,6 +1,10 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, Response
 from flask_cors import CORS
 import datetime
+import csv
+import io
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
 
 app = Flask(__name__)
 CORS(app)
@@ -13,13 +17,11 @@ LATEST_DATA = None
 LAST_UPDATE_TIME = None
 OFFLINE_THRESHOLD = 15  # seconds
 
-# 🔹 Alert Structures
 ACTIVE_ALERTS = {}
 ALERT_HISTORY = []
 
 
 def get_utc_now():
-    """Return current UTC time with timezone info"""
     return datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
 
 
@@ -97,7 +99,6 @@ def receive_device_data():
 
         LAST_UPDATE_TIME = now
 
-        # 🔹 Save History (last 100 readings)
         HISTORY.append({
             "time": now_iso,
             "strain": strain,
@@ -110,12 +111,9 @@ def receive_device_data():
         if len(HISTORY) > 100:
             HISTORY.pop(0)
 
-        # 🔹 Event-Based Alert Logic
         overall, param_status = evaluate_overall(LATEST_DATA)
 
         for param, stat in param_status.items():
-
-            # Create alert if abnormal and not already active
             if stat != "SAFE":
                 if param not in ACTIVE_ALERTS:
                     ACTIVE_ALERTS[param] = {
@@ -124,13 +122,11 @@ def receive_device_data():
                         "start_time": now_iso,
                         "zone": ZONE
                     }
-
-            # Resolve alert if returned to SAFE
             else:
                 if param in ACTIVE_ALERTS:
-                    resolved_alert = ACTIVE_ALERTS.pop(param)
-                    resolved_alert["end_time"] = now_iso
-                    ALERT_HISTORY.append(resolved_alert)
+                    resolved = ACTIVE_ALERTS.pop(param)
+                    resolved["end_time"] = now_iso
+                    ALERT_HISTORY.append(resolved)
 
     except (TypeError, ValueError):
         return jsonify({"error": "Invalid or missing sensor values"}), 400
@@ -140,8 +136,6 @@ def receive_device_data():
 
 @app.route("/api/live", methods=["GET"])
 def live_data():
-    global LATEST_DATA, LAST_UPDATE_TIME
-
     if LATEST_DATA is None:
         return jsonify({
             "device_status": "WAITING",
@@ -167,13 +161,11 @@ def live_data():
     })
 
 
-# 🔹 Active Alerts Endpoint
 @app.route("/api/alerts", methods=["GET"])
 def get_active_alerts():
     return jsonify(list(ACTIVE_ALERTS.values()))
 
 
-# 🔹 Resolved Alerts Endpoint
 @app.route("/api/alert-history", methods=["GET"])
 def get_alert_history():
     return jsonify(ALERT_HISTORY)
@@ -220,6 +212,140 @@ def get_report():
         "summary": summary,
         "advice": advice
     })
+
+
+# ==============================
+# EXPORT CSV
+# ==============================
+@app.route("/api/export/csv", methods=["GET"])
+def export_csv():
+    if not HISTORY:
+        return jsonify({"error": "No data available"}), 400
+
+    report = get_report().json
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    writer.writerow(["InfraSense Structural Monitoring Report"])
+    writer.writerow(["Device ID", DEVICE_ID])
+    writer.writerow(["Zone", ZONE])
+    writer.writerow(["Generated On", get_utc_now().isoformat()])
+    writer.writerow(["Overall Status", report["status"]])
+    writer.writerow(["Summary", report["summary"]])
+    writer.writerow(["Advice", report["advice"]])
+    writer.writerow([])
+
+    writer.writerow(["Time", "Strain", "Vibration", "Temperature", "Humidity", "Crack"])
+
+    for d in HISTORY:
+        writer.writerow([
+            d["time"],
+            d["strain"],
+            d["vibration"],
+            d["temperature"],
+            d["humidity"],
+            d["crack"]
+        ])
+
+    response = Response(output.getvalue(), mimetype="text/csv")
+    response.headers["Content-Disposition"] = "attachment; filename=infrasense_full_report.csv"
+    return response
+
+
+# ==============================
+# EXPORT TEXT
+# ==============================
+@app.route("/api/export/text", methods=["GET"])
+def export_text():
+    if not HISTORY:
+        return jsonify({"error": "No data available"}), 400
+
+    report = get_report().json
+
+    content = f"""
+InfraSense Structural Monitoring Report
+----------------------------------------
+Device ID: {DEVICE_ID}
+Zone: {ZONE}
+Generated On: {get_utc_now().isoformat()}
+
+Overall Status: {report['status']}
+Summary: {report['summary']}
+Maintenance Advice: {report['advice']}
+
+----------------------------------------
+History Data
+----------------------------------------
+"""
+
+    for d in HISTORY:
+        content += f"""
+Time: {d['time']}
+Strain: {d['strain']}
+Vibration: {d['vibration']}
+Temperature: {d['temperature']}
+Humidity: {d['humidity']}
+Crack: {d['crack']}
+----------------------------------------
+"""
+
+    response = Response(content, mimetype="text/plain")
+    response.headers["Content-Disposition"] = "attachment; filename=infrasense_full_report.txt"
+    return response
+
+
+# ==============================
+# EXPORT PDF
+# ==============================
+@app.route("/api/export/pdf", methods=["GET"])
+def export_pdf():
+    if not HISTORY:
+        return jsonify({"error": "No data available"}), 400
+
+    report = get_report().json
+
+    buffer = io.BytesIO()
+    p = canvas.Canvas(buffer, pagesize=A4)
+
+    y = 800
+
+    p.drawString(50, y, "InfraSense Structural Monitoring Report")
+    y -= 30
+    p.drawString(50, y, f"Device ID: {DEVICE_ID}")
+    y -= 20
+    p.drawString(50, y, f"Zone: {ZONE}")
+    y -= 20
+    p.drawString(50, y, f"Generated On: {get_utc_now().isoformat()}")
+    y -= 30
+
+    p.drawString(50, y, f"Overall Status: {report['status']}")
+    y -= 20
+    p.drawString(50, y, f"Summary: {report['summary']}")
+    y -= 20
+    p.drawString(50, y, f"Advice: {report['advice']}")
+    y -= 30
+
+    p.drawString(50, y, "History Data:")
+    y -= 20
+
+    for d in HISTORY:
+        line = f"{d['time']} | S:{d['strain']} | V:{d['vibration']} | T:{d['temperature']} | H:{d['humidity']} | C:{d['crack']}"
+        p.drawString(50, y, line)
+        y -= 15
+
+        if y < 50:
+            p.showPage()
+            y = 800
+
+    p.save()
+    buffer.seek(0)
+
+    return Response(
+        buffer,
+        mimetype='application/pdf',
+        headers={"Content-Disposition": "attachment;filename=infrasense_full_report.pdf"}
+    )
 
 
 if __name__ == "__main__":
