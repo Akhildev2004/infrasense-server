@@ -21,6 +21,8 @@ ZONE = "Column_A1"
 ALERTS = []
 HISTORY = []
 LATEST_DATA = None
+LAST_UPDATE_TIME = None
+OFFLINE_THRESHOLD = 15  # seconds
 
 # -----------------------------
 # STATUS EVALUATION
@@ -76,12 +78,13 @@ def evaluate_overall(data):
 
     return overall, status
 
+
 # -----------------------------
 # DEVICE DATA INGEST (ESP)
 # -----------------------------
 @app.route("/api/device", methods=["GET", "POST"])
 def receive_device_data():
-    global LATEST_DATA
+    global LATEST_DATA, LAST_UPDATE_TIME
 
     try:
         strain = float(request.args.get("value1"))
@@ -101,57 +104,73 @@ def receive_device_data():
             "crack": crack
         }
 
+        LAST_UPDATE_TIME = datetime.datetime.now()
+
     except (TypeError, ValueError):
         return jsonify({"error": "Invalid or missing sensor values"}), 400
 
     return jsonify({"status": "data received"})
+
 
 # -----------------------------
 # LIVE DATA API
 # -----------------------------
 @app.route("/api/live", methods=["GET"])
 def live_data():
-    global LATEST_DATA
+    global LATEST_DATA, LAST_UPDATE_TIME
 
+    # If no data ever received
     if LATEST_DATA is None:
         return jsonify({
-            "error": "No device data received yet",
-            "device_status": "WAITING"
+            "device_status": "WAITING",
+            "error": "No device data received yet"
         }), 200
+
+    # Check offline condition
+    device_status = "ONLINE"
+
+    if LAST_UPDATE_TIME is not None:
+        time_diff = (datetime.datetime.now() - LAST_UPDATE_TIME).total_seconds()
+        if time_diff > OFFLINE_THRESHOLD:
+            device_status = "OFFLINE"
 
     data = LATEST_DATA
     overall, param_status = evaluate_overall(data)
 
-    ALERTS.clear()
-    for param, stat in param_status.items():
-        if stat != "SAFE":
-            ALERTS.append({
-                "zone": data["zone"],
-                "parameter": param,
-                "severity": stat,
-                "value": data[param],
-                "time": data["timestamp"]
-            })
+    # Only update alerts & history if ONLINE
+    if device_status == "ONLINE":
+        ALERTS.clear()
+        for param, stat in param_status.items():
+            if stat != "SAFE":
+                ALERTS.append({
+                    "zone": data["zone"],
+                    "parameter": param,
+                    "severity": stat,
+                    "value": data[param],
+                    "time": data["timestamp"]
+                })
 
-    HISTORY.append({
-        "time": data["timestamp"],
-        "strain": data["strain"],
-        "vibration": data["vibration"],
-        "temperature": data["temperature"],
-        "humidity": data["humidity"],
-        "crack": data["crack"]
-    })
+        HISTORY.append({
+            "time": data["timestamp"],
+            "strain": data["strain"],
+            "vibration": data["vibration"],
+            "temperature": data["temperature"],
+            "humidity": data["humidity"],
+            "crack": data["crack"]
+        })
 
-    if len(HISTORY) > 100:
-        HISTORY.pop(0)
+        if len(HISTORY) > 100:
+            HISTORY.pop(0)
 
     return jsonify({
+        "device_status": device_status,
         "data": data,
         "status": {
             "overall": overall,
             "parameters": param_status
         }
     })
+
 
 # -----------------------------
 # ALERTS API
@@ -160,12 +179,14 @@ def live_data():
 def get_alerts():
     return jsonify(ALERTS)
 
+
 # -----------------------------
 # HISTORY API
 # -----------------------------
 @app.route("/api/history", methods=["GET"])
 def get_history():
     return jsonify(HISTORY)
+
 
 # -----------------------------
 # SIMPLE AI REPORT
@@ -206,6 +227,7 @@ def get_report():
         "summary": summary,
         "advice": advice
     })
+
 
 # -----------------------------
 # RUN SERVER
