@@ -13,9 +13,14 @@ LATEST_DATA = None
 LAST_UPDATE_TIME = None
 OFFLINE_THRESHOLD = 15  # seconds
 
-# 🔹 New Alert Structures
+# 🔹 Alert Structures
 ACTIVE_ALERTS = {}
 ALERT_HISTORY = []
+
+
+def get_utc_now():
+    """Return current UTC time with timezone info"""
+    return datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
 
 
 def evaluate_overall(data):
@@ -76,7 +81,7 @@ def receive_device_data():
         vibration = float(request.args.get("value4"))
         humidity = float(request.args.get("value5"))
 
-        now = datetime.datetime.now()
+        now = get_utc_now()
         now_iso = now.isoformat()
 
         LATEST_DATA = {
@@ -92,7 +97,7 @@ def receive_device_data():
 
         LAST_UPDATE_TIME = now
 
-        # 🔹 Save History (unchanged logic)
+        # 🔹 Save History (last 100 readings)
         HISTORY.append({
             "time": now_iso,
             "strain": strain,
@@ -110,7 +115,7 @@ def receive_device_data():
 
         for param, stat in param_status.items():
 
-            # If abnormal and not already active → create alert
+            # Create alert if abnormal and not already active
             if stat != "SAFE":
                 if param not in ACTIVE_ALERTS:
                     ACTIVE_ALERTS[param] = {
@@ -120,7 +125,7 @@ def receive_device_data():
                         "zone": ZONE
                     }
 
-            # If SAFE and was active → resolve alert
+            # Resolve alert if returned to SAFE
             else:
                 if param in ACTIVE_ALERTS:
                     resolved_alert = ACTIVE_ALERTS.pop(param)
@@ -146,7 +151,7 @@ def live_data():
     device_status = "ONLINE"
 
     if LAST_UPDATE_TIME:
-        diff = (datetime.datetime.now() - LAST_UPDATE_TIME).total_seconds()
+        diff = (get_utc_now() - LAST_UPDATE_TIME).total_seconds()
         if diff > OFFLINE_THRESHOLD:
             device_status = "OFFLINE"
 
@@ -168,7 +173,7 @@ def get_active_alerts():
     return jsonify(list(ACTIVE_ALERTS.values()))
 
 
-# 🔹 Alert History Endpoint (Resolved Alerts)
+# 🔹 Resolved Alerts Endpoint
 @app.route("/api/alert-history", methods=["GET"])
 def get_alert_history():
     return jsonify(ALERT_HISTORY)
