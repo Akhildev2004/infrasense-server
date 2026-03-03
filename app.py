@@ -147,8 +147,14 @@ def receive_device_data():
 
         overall, param_status = evaluate_overall(LATEST_DATA)
 
+        print(f"=== DEVICE DATA DEBUG ===")
+        print(f"Received data: {LATEST_DATA}")
+        print(f"Parameter status: {param_status}")
+        print(f"Overall status: {overall}")
+
         for param, stat in param_status.items():
             if stat != "SAFE":
+                print(f"ALERT CONDITION: {param} = {stat}")
                 if param not in ACTIVE_ALERTS:
                     alert_data = {
                         "parameter": param,
@@ -157,23 +163,37 @@ def receive_device_data():
                         "zone": zone_name
                     }
                     ACTIVE_ALERTS[param] = alert_data
+                    print(f"NEW ALERT CREATED: {alert_data}")
                     
                     # Add to session alerts if active session exists
                     if ACTIVE_SESSION:
                         session_id = ACTIVE_SESSION["session_id"]
                         if session_id in SESSIONS:
                             SESSIONS[session_id]["alerts"][param] = alert_data
+                            print(f"ALERT ADDED TO SESSION: {session_id}")
+                    
+                    # Debug logging for critical alerts
+                    if stat == "CRITICAL":
+                        print(f"🚨 CRITICAL ALERT GENERATED: {param} in zone {zone_name} at {now_iso}")
+                        print(f"Alert data: {alert_data}")
+                else:
+                    print(f"ALERT ALREADY EXISTS: {param}")
             else:
                 if param in ACTIVE_ALERTS:
                     resolved = ACTIVE_ALERTS.pop(param)
                     resolved["end_time"] = now_iso
                     ALERT_HISTORY.append(resolved)
+                    print(f"ALERT RESOLVED: {param}")
                     
                     # Remove from session alerts if active session exists
                     if ACTIVE_SESSION:
                         session_id = ACTIVE_SESSION["session_id"]
                         if session_id in SESSIONS and param in SESSIONS[session_id]["alerts"]:
                             del SESSIONS[session_id]["alerts"][param]
+                            print(f"ALERT REMOVED FROM SESSION: {session_id}")
+        
+        print(f"Final ACTIVE_ALERTS: {ACTIVE_ALERTS}")
+        print(f"=======================")
 
     except (TypeError, ValueError):
         return jsonify({"error": "Invalid or missing sensor values"}), 400
@@ -311,13 +331,23 @@ def live_data():
 @app.route("/api/alerts", methods=["GET"])
 def get_active_alerts():
     """Return alerts from current session or global alerts"""
+    print(f"=== ALERTS DEBUG ===")
+    print(f"ACTIVE_SESSION: {ACTIVE_SESSION}")
+    print(f"ACTIVE_ALERTS: {ACTIVE_ALERTS}")
+    
     if ACTIVE_SESSION:
         session_id = ACTIVE_SESSION["session_id"]
+        print(f"Session ID: {session_id}")
         if session_id in SESSIONS:
-            return jsonify(list(SESSIONS[session_id]["alerts"].values()))
+            session_alerts = list(SESSIONS[session_id]["alerts"].values())
+            print(f"Session alerts: {session_alerts}")
+            return jsonify(session_alerts)
     
     # Fallback to global alerts
-    return jsonify(list(ACTIVE_ALERTS.values()))
+    global_alerts = list(ACTIVE_ALERTS.values())
+    print(f"Global alerts: {global_alerts}")
+    print(f"==================")
+    return jsonify(global_alerts)
 
 
 @app.route("/api/alert-history", methods=["GET"])
@@ -472,6 +502,49 @@ def export_session():
     return jsonify({
         "status": "success",
         "session_data": session_data
+    })
+
+@app.route("/api/test/critical", methods=["POST"])
+def test_critical_alerts():
+    """Test endpoint to generate critical alerts for testing"""
+    global ACTIVE_ALERTS, ACTIVE_SESSION, CURRENT_ZONE
+    
+    # Generate test critical data
+    test_data = {
+        "device_id": DEVICE_ID,
+        "zone": CURRENT_ZONE or "Test_Zone",
+        "timestamp": get_utc_now().isoformat(),
+        "strain": 400,  # Critical
+        "vibration": 0.1,  # Critical
+        "temperature": 50,  # Critical
+        "humidity": 90,  # Critical
+        "crack": 0.6  # Critical
+    }
+    
+    # Evaluate and generate alerts
+    overall, param_status = evaluate_overall(test_data)
+    
+    for param, stat in param_status.items():
+        if stat == "CRITICAL":
+            alert_data = {
+                "parameter": param,
+                "severity": stat,
+                "start_time": test_data["timestamp"],
+                "zone": test_data["zone"]
+            }
+            ACTIVE_ALERTS[param] = alert_data
+            
+            # Add to session alerts if active session exists
+            if ACTIVE_SESSION:
+                session_id = ACTIVE_SESSION["session_id"]
+                if session_id in SESSIONS:
+                    SESSIONS[session_id]["alerts"][param] = alert_data
+    
+    return jsonify({
+        "status": "success",
+        "message": "Critical alerts generated for testing",
+        "alerts": list(ACTIVE_ALERTS.values()),
+        "test_data": test_data
     })
 
 
@@ -639,21 +712,26 @@ def get_report():
         session_data = SESSIONS.get(session_id, {})
         reports = generate_session_reports(session_data)
         
+        # Get session alerts for AI analysis
+        session_alerts = list(session_data.get("alerts", {}).values())
+        
         return jsonify({
             "status": "SUCCESS",
             "session_id": session_id,
             "building_name": session_data.get("building_name", "Unknown"),
             "summary": f"Session report generated for {session_data.get('building_name', 'Unknown Building')}",
             "advice": "Review zone-specific alerts and historical trends",
+            "alerts": session_alerts,  # Add alerts for AI analysis
             "reports": reports
         })
     
     # Fallback to original logic if no active session
     elif not HISTORY:
         return jsonify({
-            "status": "NO DATA",
-            "summary": "No monitoring data available.",
-            "advice": "Start a session to generate report."
+            "status": "NO SESSION",
+            "summary": "No active session or monitoring data available.",
+            "advice": "Start a session to generate comprehensive report.",
+            "alerts": []
         })
 
     # Generate report from existing data
@@ -682,7 +760,8 @@ def get_report():
     return jsonify({
         "status": status,
         "summary": summary,
-        "advice": advice
+        "advice": advice,
+        "alerts": list(ACTIVE_ALERTS.values())  # Include current alerts
     })
 
 
