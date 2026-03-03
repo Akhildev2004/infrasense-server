@@ -5,6 +5,8 @@ import csv
 import io
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
+import threading
+import time
 
 app = Flask(__name__)
 CORS(app)
@@ -20,6 +22,10 @@ OFFLINE_THRESHOLD = 15  # seconds
 ACTIVE_ALERTS = {}
 ALERT_HISTORY = []
 
+# Scan functionality
+SCANNING = False
+SCAN_THREAD = None
+SCAN_STATUS = {"status": "idle", "message": "Ready to scan"}
 
 def get_utc_now():
     return datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
@@ -132,6 +138,152 @@ def receive_device_data():
         return jsonify({"error": "Invalid or missing sensor values"}), 400
 
     return jsonify({"status": "data received"})
+
+
+def simulate_device_scan():
+    """Simulate a device scan by generating sample data"""
+    global SCANNING, SCAN_STATUS, LATEST_DATA, LAST_UPDATE_TIME
+    
+    import random
+    
+    SCAN_STATUS["status"] = "scanning"
+    SCAN_STATUS["message"] = "Scanning device sensors..."
+    
+    # Simulate scanning process
+    for i in range(5):
+        if not SCANNING:
+            break
+            
+        SCAN_STATUS["message"] = f"Scanning sensor {i+1}/5..."
+        time.sleep(1)
+    
+    if SCANNING:
+        # Generate sample data
+        strain = random.uniform(100, 400)
+        vibration = random.uniform(0.01, 0.1)
+        temperature = random.uniform(20, 50)
+        humidity = random.uniform(40, 90)
+        crack = random.uniform(0.0, 0.8)
+        
+        now = get_utc_now()
+        now_iso = now.isoformat()
+        
+        LATEST_DATA = {
+            "device_id": DEVICE_ID,
+            "zone": ZONE,
+            "timestamp": now_iso,
+            "strain": strain,
+            "vibration": vibration,
+            "temperature": temperature,
+            "humidity": humidity,
+            "crack": crack
+        }
+        
+        LAST_UPDATE_TIME = now
+        
+        HISTORY.append({
+            "time": now_iso,
+            "strain": strain,
+            "vibration": vibration,
+            "temperature": temperature,
+            "humidity": humidity,
+            "crack": crack
+        })
+        
+        if len(HISTORY) > 100:
+            HISTORY.pop(0)
+        
+        # Update alerts based on new data
+        overall, param_status = evaluate_overall(LATEST_DATA)
+        
+        for param, stat in param_status.items():
+            if stat != "SAFE":
+                if param not in ACTIVE_ALERTS:
+                    ACTIVE_ALERTS[param] = {
+                        "parameter": param,
+                        "severity": stat,
+                        "start_time": now_iso,
+                        "zone": ZONE
+                    }
+            else:
+                if param in ACTIVE_ALERTS:
+                    resolved = ACTIVE_ALERTS.pop(param)
+                    resolved["end_time"] = now_iso
+                    ALERT_HISTORY.append(resolved)
+        
+        SCAN_STATUS["status"] = "completed"
+        SCAN_STATUS["message"] = f"Scan completed! Status: {overall}"
+    
+    SCANNING = False
+
+
+@app.route("/api/scan", methods=["POST"])
+def start_scan():
+    """Start a device scan"""
+    global SCANNING, SCAN_THREAD, SCAN_STATUS
+    
+    if SCANNING:
+        return jsonify({
+            "status": "error",
+            "message": "Scan already in progress"
+        }), 400
+    
+    SCANNING = True
+    SCAN_STATUS = {"status": "starting", "message": "Initializing scan..."}
+    
+    # Start scan in background thread
+    SCAN_THREAD = threading.Thread(target=simulate_device_scan)
+    SCAN_THREAD.daemon = True
+    SCAN_THREAD.start()
+    
+    return jsonify({
+        "status": "success",
+        "message": "Scan started successfully"
+    })
+
+
+@app.route("/api/scan/status", methods=["GET"])
+def get_scan_status():
+    """Get current scan status"""
+    return jsonify(SCAN_STATUS)
+
+
+@app.route("/api/device/status", methods=["GET"])
+def get_device_status():
+    """Get detailed device status"""
+    if LATEST_DATA is None:
+        return jsonify({
+            "device_status": "WAITING",
+            "device_id": DEVICE_ID,
+            "zone": ZONE,
+            "last_update": None,
+            "connection_status": "disconnected",
+            "message": "Waiting for device data..."
+        })
+    
+    device_status = "ONLINE"
+    connection_status = "connected"
+    message = "Device operating normally"
+    
+    if LAST_UPDATE_TIME:
+        diff = (get_utc_now() - LAST_UPDATE_TIME).total_seconds()
+        if diff > OFFLINE_THRESHOLD:
+            device_status = "OFFLINE"
+            connection_status = "disconnected"
+            message = "Device not responding"
+    
+    overall, param_status = evaluate_overall(LATEST_DATA)
+    
+    return jsonify({
+        "device_status": device_status,
+        "device_id": DEVICE_ID,
+        "zone": ZONE,
+        "last_update": LAST_UPDATE_TIME.isoformat() if LAST_UPDATE_TIME else None,
+        "connection_status": connection_status,
+        "message": message,
+        "overall_status": overall,
+        "parameter_status": param_status
+    })
 
 
 @app.route("/api/live", methods=["GET"])
