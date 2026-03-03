@@ -140,79 +140,33 @@ def receive_device_data():
     return jsonify({"status": "data received"})
 
 
-def simulate_device_scan():
-    """Simulate a device scan by generating sample data"""
+def trigger_device_scan():
+    """Trigger actual device scan - only uses real device data"""
     global SCANNING, SCAN_STATUS, LATEST_DATA, LAST_UPDATE_TIME
     
-    import random
-    
     SCAN_STATUS["status"] = "scanning"
-    SCAN_STATUS["message"] = "Scanning device sensors..."
+    SCAN_STATUS["message"] = "Waiting for device data..."
     
-    # Simulate scanning process
-    for i in range(5):
+    # Wait for real device data (max 10 seconds)
+    for i in range(10):
         if not SCANNING:
             break
             
-        SCAN_STATUS["message"] = f"Scanning sensor {i+1}/5..."
+        SCAN_STATUS["message"] = f"Waiting for device data... ({i+1}/10s)"
         time.sleep(1)
+        
+        # Check if we received real device data during scan
+        if LATEST_DATA and LAST_UPDATE_TIME:
+            time_diff = (get_utc_now() - LAST_UPDATE_TIME).total_seconds()
+            if time_diff < 5:  # Got recent data
+                overall, param_status = evaluate_overall(LATEST_DATA)
+                SCAN_STATUS["status"] = "completed"
+                SCAN_STATUS["message"] = f"Scan completed! Status: {overall}"
+                break
     
-    if SCANNING:
-        # Generate sample data
-        strain = random.uniform(100, 400)
-        vibration = random.uniform(0.01, 0.1)
-        temperature = random.uniform(20, 50)
-        humidity = random.uniform(40, 90)
-        crack = random.uniform(0.0, 0.8)
-        
-        now = get_utc_now()
-        now_iso = now.isoformat()
-        
-        LATEST_DATA = {
-            "device_id": DEVICE_ID,
-            "zone": ZONE,
-            "timestamp": now_iso,
-            "strain": strain,
-            "vibration": vibration,
-            "temperature": temperature,
-            "humidity": humidity,
-            "crack": crack
-        }
-        
-        LAST_UPDATE_TIME = now
-        
-        HISTORY.append({
-            "time": now_iso,
-            "strain": strain,
-            "vibration": vibration,
-            "temperature": temperature,
-            "humidity": humidity,
-            "crack": crack
-        })
-        
-        if len(HISTORY) > 100:
-            HISTORY.pop(0)
-        
-        # Update alerts based on new data
-        overall, param_status = evaluate_overall(LATEST_DATA)
-        
-        for param, stat in param_status.items():
-            if stat != "SAFE":
-                if param not in ACTIVE_ALERTS:
-                    ACTIVE_ALERTS[param] = {
-                        "parameter": param,
-                        "severity": stat,
-                        "start_time": now_iso,
-                        "zone": ZONE
-                    }
-            else:
-                if param in ACTIVE_ALERTS:
-                    resolved = ACTIVE_ALERTS.pop(param)
-                    resolved["end_time"] = now_iso
-                    ALERT_HISTORY.append(resolved)
-        
-        SCAN_STATUS["status"] = "completed"
-        SCAN_STATUS["message"] = f"Scan completed! Status: {overall}"
+    if SCANNING and SCAN_STATUS["status"] == "scanning":
+        SCAN_STATUS["status"] = "failed"
+        SCAN_STATUS["message"] = "No device data received. Check device connection."
     
     SCANNING = False
 
@@ -232,7 +186,7 @@ def start_scan():
     SCAN_STATUS = {"status": "starting", "message": "Initializing scan..."}
     
     # Start scan in background thread
-    SCAN_THREAD = threading.Thread(target=simulate_device_scan)
+    SCAN_THREAD = threading.Thread(target=trigger_device_scan)
     SCAN_THREAD.daemon = True
     SCAN_THREAD.start()
     
@@ -251,9 +205,9 @@ def get_scan_status():
 @app.route("/api/device/status", methods=["GET"])
 def get_device_status():
     """Get detailed device status"""
-    if LATEST_DATA is None:
+    if LATEST_DATA is None or LAST_UPDATE_TIME is None:
         return jsonify({
-            "device_status": "WAITING",
+            "device_status": "OFFLINE",
             "device_id": DEVICE_ID,
             "zone": ZONE,
             "last_update": None,
@@ -288,9 +242,9 @@ def get_device_status():
 
 @app.route("/api/live", methods=["GET"])
 def live_data():
-    if LATEST_DATA is None:
+    if LATEST_DATA is None or LAST_UPDATE_TIME is None:
         return jsonify({
-            "device_status": "WAITING",
+            "device_status": "OFFLINE",
             "error": "No device data received yet"
         })
 
