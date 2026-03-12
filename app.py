@@ -15,10 +15,25 @@ ZONE = "Column_A1"
 HISTORY = []
 LATEST_DATA = None
 LAST_UPDATE_TIME = None
-OFFLINE_THRESHOLD = 15  # seconds
+OFFLINE_THRESHOLD = 15
 
 ACTIVE_ALERTS = {}
 ALERT_HISTORY = []
+
+# ==============================
+# SESSION OBJECT (NEW)
+# ==============================
+
+SESSION = {
+    "id": None,
+    "building": None,
+    "zone": None,
+    "start_time": None,
+    "end_time": None,
+    "active": False
+}
+
+SESSION_COUNTER = 0
 
 
 def get_utc_now():
@@ -26,6 +41,7 @@ def get_utc_now():
 
 
 def evaluate_overall(data):
+
     status = {}
 
     if data["strain"] < 250:
@@ -64,6 +80,7 @@ def evaluate_overall(data):
         status["crack"] = "CRITICAL"
 
     overall = "SAFE"
+
     if "CRITICAL" in status.values():
         overall = "CRITICAL"
     elif "WARNING" in status.values():
@@ -72,11 +89,17 @@ def evaluate_overall(data):
     return overall, status
 
 
+# ==============================
+# DEVICE DATA RECEIVE
+# ==============================
+
 @app.route("/api/device", methods=["GET", "POST"])
 def receive_device_data():
+
     global LATEST_DATA, LAST_UPDATE_TIME
 
     try:
+
         strain = float(request.args.get("value1"))
         temperature = float(request.args.get("value2"))
         crack = float(request.args.get("value3"))
@@ -114,7 +137,9 @@ def receive_device_data():
         overall, param_status = evaluate_overall(LATEST_DATA)
 
         for param, stat in param_status.items():
+
             if stat != "SAFE":
+
                 if param not in ACTIVE_ALERTS:
                     ACTIVE_ALERTS[param] = {
                         "parameter": param,
@@ -122,21 +147,32 @@ def receive_device_data():
                         "start_time": now_iso,
                         "zone": ZONE
                     }
+
             else:
+
                 if param in ACTIVE_ALERTS:
                     resolved = ACTIVE_ALERTS.pop(param)
                     resolved["end_time"] = now_iso
                     ALERT_HISTORY.append(resolved)
 
     except (TypeError, ValueError):
-        return jsonify({"error": "Invalid or missing sensor values"}), 400
+
+        return jsonify({
+            "error": "Invalid or missing sensor values"
+        }), 400
 
     return jsonify({"status": "data received"})
 
 
+# ==============================
+# LIVE DATA
+# ==============================
+
 @app.route("/api/live", methods=["GET"])
 def live_data():
+
     if LATEST_DATA is None:
+
         return jsonify({
             "device_status": "WAITING",
             "error": "No device data received yet"
@@ -145,7 +181,9 @@ def live_data():
     device_status = "ONLINE"
 
     if LAST_UPDATE_TIME:
+
         diff = (get_utc_now() - LAST_UPDATE_TIME).total_seconds()
+
         if diff > OFFLINE_THRESHOLD:
             device_status = "OFFLINE"
 
@@ -161,6 +199,10 @@ def live_data():
     })
 
 
+# ==============================
+# ALERT APIs
+# ==============================
+
 @app.route("/api/alerts", methods=["GET"])
 def get_active_alerts():
     return jsonify(list(ACTIVE_ALERTS.values()))
@@ -171,13 +213,70 @@ def get_alert_history():
     return jsonify(ALERT_HISTORY)
 
 
+# ==============================
+# HISTORY
+# ==============================
+
 @app.route("/api/history", methods=["GET"])
 def get_history():
     return jsonify(HISTORY)
 
 
+# ==============================
+# SESSION START
+# ==============================
+
+@app.route("/api/session/start", methods=["POST"])
+def start_session():
+
+    global SESSION_COUNTER
+
+    if SESSION["active"]:
+        return jsonify({"error": "Session already active"}), 400
+
+    data = request.json
+
+    SESSION_COUNTER += 1
+
+    SESSION["id"] = SESSION_COUNTER
+    SESSION["building"] = data.get("building")
+    SESSION["zone"] = data.get("zone")
+    SESSION["start_time"] = get_utc_now().isoformat()
+    SESSION["end_time"] = None
+    SESSION["active"] = True
+
+    return jsonify({
+        "message": "Session started",
+        "session": SESSION
+    })
+
+
+# ==============================
+# SESSION END
+# ==============================
+
+@app.route("/api/session/end", methods=["POST"])
+def end_session():
+
+    if not SESSION["active"]:
+        return jsonify({"error": "No active session"}), 400
+
+    SESSION["end_time"] = get_utc_now().isoformat()
+    SESSION["active"] = False
+
+    return jsonify({
+        "message": "Session ended",
+        "session": SESSION
+    })
+
+
+# ==============================
+# REPORT
+# ==============================
+
 @app.route("/api/report", methods=["GET"])
 def get_report():
+
     if not HISTORY:
         return jsonify({
             "status": "NO DATA",
@@ -189,20 +288,27 @@ def get_report():
     critical = 0
 
     for d in HISTORY:
+
         if d["crack"] > 0.5:
             critical += 1
+
         if d["strain"] > 300 or d["humidity"] > 80:
             warnings += 1
 
     if critical > 5:
+
         status = "CRITICAL"
         summary = "Severe structural distress detected."
         advice = "Immediate inspection recommended."
+
     elif warnings > 5:
+
         status = "WARNING"
         summary = "Early structural degradation signs observed."
         advice = "Schedule preventive maintenance."
+
     else:
+
         status = "SAFE"
         summary = "Structure performing within acceptable limits."
         advice = "Continue routine monitoring."
@@ -217,8 +323,10 @@ def get_report():
 # ==============================
 # EXPORT CSV
 # ==============================
+
 @app.route("/api/export/csv", methods=["GET"])
 def export_csv():
+
     if not HISTORY:
         return jsonify({"error": "No data available"}), 400
 
@@ -250,14 +358,17 @@ def export_csv():
 
     response = Response(output.getvalue(), mimetype="text/csv")
     response.headers["Content-Disposition"] = "attachment; filename=infrasense_full_report.csv"
+
     return response
 
 
 # ==============================
 # EXPORT TEXT
 # ==============================
+
 @app.route("/api/export/text", methods=["GET"])
 def export_text():
+
     if not HISTORY:
         return jsonify({"error": "No data available"}), 400
 
@@ -280,6 +391,7 @@ History Data
 """
 
     for d in HISTORY:
+
         content += f"""
 Time: {d['time']}
 Strain: {d['strain']}
@@ -292,37 +404,46 @@ Crack: {d['crack']}
 
     response = Response(content, mimetype="text/plain")
     response.headers["Content-Disposition"] = "attachment; filename=infrasense_full_report.txt"
+
     return response
 
 
 # ==============================
 # EXPORT PDF
 # ==============================
+
 @app.route("/api/export/pdf", methods=["GET"])
 def export_pdf():
+
     if not HISTORY:
         return jsonify({"error": "No data available"}), 400
 
     report = get_report().json
 
     buffer = io.BytesIO()
+
     p = canvas.Canvas(buffer, pagesize=A4)
 
     y = 800
 
     p.drawString(50, y, "InfraSense Structural Monitoring Report")
     y -= 30
+
     p.drawString(50, y, f"Device ID: {DEVICE_ID}")
     y -= 20
+
     p.drawString(50, y, f"Zone: {ZONE}")
     y -= 20
+
     p.drawString(50, y, f"Generated On: {get_utc_now().isoformat()}")
     y -= 30
 
     p.drawString(50, y, f"Overall Status: {report['status']}")
     y -= 20
+
     p.drawString(50, y, f"Summary: {report['summary']}")
     y -= 20
+
     p.drawString(50, y, f"Advice: {report['advice']}")
     y -= 30
 
@@ -330,8 +451,11 @@ def export_pdf():
     y -= 20
 
     for d in HISTORY:
+
         line = f"{d['time']} | S:{d['strain']} | V:{d['vibration']} | T:{d['temperature']} | H:{d['humidity']} | C:{d['crack']}"
+
         p.drawString(50, y, line)
+
         y -= 15
 
         if y < 50:
@@ -339,12 +463,15 @@ def export_pdf():
             y = 800
 
     p.save()
+
     buffer.seek(0)
 
     return Response(
         buffer,
         mimetype='application/pdf',
-        headers={"Content-Disposition": "attachment;filename=infrasense_full_report.pdf"}
+        headers={
+            "Content-Disposition": "attachment;filename=infrasense_full_report.pdf"
+        }
     )
 
 
