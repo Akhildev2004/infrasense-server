@@ -10,18 +10,9 @@ app = Flask(__name__)
 CORS(app)
 
 DEVICE_ID = "INFRA-001"
-ZONE = "Column_A1"
-
-HISTORY = []
-LATEST_DATA = None
-LAST_UPDATE_TIME = None
-OFFLINE_THRESHOLD = 15
-
-ACTIVE_ALERTS = {}
-ALERT_HISTORY = []
 
 # ==============================
-# SESSION OBJECT (NEW)
+# SESSION STORAGE
 # ==============================
 
 SESSION = {
@@ -34,11 +25,26 @@ SESSION = {
 }
 
 SESSION_COUNTER = 0
+SESSION_ARCHIVE = []
 
+# ==============================
+# MONITORING DATA
+# ==============================
+
+HISTORY = []
+LATEST_DATA = None
+LAST_UPDATE_TIME = None
+OFFLINE_THRESHOLD = 15
+
+ACTIVE_ALERTS = {}
+ALERT_HISTORY = []
+
+# ==============================
 
 def get_utc_now():
     return datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc)
 
+# ==============================
 
 def evaluate_overall(data):
 
@@ -88,7 +94,6 @@ def evaluate_overall(data):
 
     return overall, status
 
-
 # ==============================
 # DEVICE DATA RECEIVE
 # ==============================
@@ -97,6 +102,9 @@ def evaluate_overall(data):
 def receive_device_data():
 
     global LATEST_DATA, LAST_UPDATE_TIME
+
+    if not SESSION["active"]:
+        return jsonify({"error": "No active session"}), 400
 
     try:
 
@@ -111,7 +119,7 @@ def receive_device_data():
 
         LATEST_DATA = {
             "device_id": DEVICE_ID,
-            "zone": ZONE,
+            "zone": SESSION["zone"],
             "timestamp": now_iso,
             "strain": strain,
             "vibration": vibration,
@@ -145,7 +153,7 @@ def receive_device_data():
                         "parameter": param,
                         "severity": stat,
                         "start_time": now_iso,
-                        "zone": ZONE
+                        "zone": SESSION["zone"]
                     }
 
             else:
@@ -163,7 +171,6 @@ def receive_device_data():
 
     return jsonify({"status": "data received"})
 
-
 # ==============================
 # LIVE DATA
 # ==============================
@@ -171,11 +178,15 @@ def receive_device_data():
 @app.route("/api/live", methods=["GET"])
 def live_data():
 
+    if not SESSION["active"]:
+        return jsonify({
+            "device_status": "SESSION_STOPPED"
+        })
+
     if LATEST_DATA is None:
 
         return jsonify({
-            "device_status": "WAITING",
-            "error": "No device data received yet"
+            "device_status": "WAITING"
         })
 
     device_status = "ONLINE"
@@ -198,7 +209,6 @@ def live_data():
         }
     })
 
-
 # ==============================
 # ALERT APIs
 # ==============================
@@ -207,11 +217,9 @@ def live_data():
 def get_active_alerts():
     return jsonify(list(ACTIVE_ALERTS.values()))
 
-
 @app.route("/api/alert-history", methods=["GET"])
 def get_alert_history():
     return jsonify(ALERT_HISTORY)
-
 
 # ==============================
 # HISTORY
@@ -221,7 +229,6 @@ def get_alert_history():
 def get_history():
     return jsonify(HISTORY)
 
-
 # ==============================
 # SESSION START
 # ==============================
@@ -230,6 +237,7 @@ def get_history():
 def start_session():
 
     global SESSION_COUNTER
+    global HISTORY, ACTIVE_ALERTS, ALERT_HISTORY, LATEST_DATA
 
     if SESSION["active"]:
         return jsonify({"error": "Session already active"}), 400
@@ -245,11 +253,15 @@ def start_session():
     SESSION["end_time"] = None
     SESSION["active"] = True
 
+    HISTORY.clear()
+    ACTIVE_ALERTS.clear()
+    ALERT_HISTORY.clear()
+    LATEST_DATA = None
+
     return jsonify({
         "message": "Session started",
         "session": SESSION
     })
-
 
 # ==============================
 # SESSION END
@@ -258,17 +270,33 @@ def start_session():
 @app.route("/api/session/end", methods=["POST"])
 def end_session():
 
+    global HISTORY, ACTIVE_ALERTS, ALERT_HISTORY, LATEST_DATA, LAST_UPDATE_TIME
+
     if not SESSION["active"]:
         return jsonify({"error": "No active session"}), 400
 
     SESSION["end_time"] = get_utc_now().isoformat()
     SESSION["active"] = False
 
+    SESSION_ARCHIVE.append({
+        "building": SESSION["building"],
+        "zone": SESSION["zone"],
+        "start_time": SESSION["start_time"],
+        "end_time": SESSION["end_time"],
+        "history": HISTORY.copy(),
+        "alerts": ALERT_HISTORY.copy()
+    })
+
+    HISTORY.clear()
+    ACTIVE_ALERTS.clear()
+    ALERT_HISTORY.clear()
+    LATEST_DATA = None
+    LAST_UPDATE_TIME = None
+
     return jsonify({
         "message": "Session ended",
         "session": SESSION
     })
-
 
 # ==============================
 # REPORT
@@ -314,11 +342,12 @@ def get_report():
         advice = "Continue routine monitoring."
 
     return jsonify({
+        "building": SESSION["building"],
+        "zone": SESSION["zone"],
         "status": status,
         "summary": summary,
         "advice": advice
     })
-
 
 # ==============================
 # EXPORT CSV
@@ -337,7 +366,8 @@ def export_csv():
 
     writer.writerow(["InfraSense Structural Monitoring Report"])
     writer.writerow(["Device ID", DEVICE_ID])
-    writer.writerow(["Zone", ZONE])
+    writer.writerow(["Building", report["building"]])
+    writer.writerow(["Zone", report["zone"]])
     writer.writerow(["Generated On", get_utc_now().isoformat()])
     writer.writerow(["Overall Status", report["status"]])
     writer.writerow(["Summary", report["summary"]])
@@ -357,123 +387,11 @@ def export_csv():
         ])
 
     response = Response(output.getvalue(), mimetype="text/csv")
-    response.headers["Content-Disposition"] = "attachment; filename=infrasense_full_report.csv"
+    response.headers["Content-Disposition"] = "attachment; filename=infrasense_report.csv"
 
     return response
 
-
 # ==============================
-# EXPORT TEXT
-# ==============================
-
-@app.route("/api/export/text", methods=["GET"])
-def export_text():
-
-    if not HISTORY:
-        return jsonify({"error": "No data available"}), 400
-
-    report = get_report().json
-
-    content = f"""
-InfraSense Structural Monitoring Report
-----------------------------------------
-Device ID: {DEVICE_ID}
-Zone: {ZONE}
-Generated On: {get_utc_now().isoformat()}
-
-Overall Status: {report['status']}
-Summary: {report['summary']}
-Maintenance Advice: {report['advice']}
-
-----------------------------------------
-History Data
-----------------------------------------
-"""
-
-    for d in HISTORY:
-
-        content += f"""
-Time: {d['time']}
-Strain: {d['strain']}
-Vibration: {d['vibration']}
-Temperature: {d['temperature']}
-Humidity: {d['humidity']}
-Crack: {d['crack']}
-----------------------------------------
-"""
-
-    response = Response(content, mimetype="text/plain")
-    response.headers["Content-Disposition"] = "attachment; filename=infrasense_full_report.txt"
-
-    return response
-
-
-# ==============================
-# EXPORT PDF
-# ==============================
-
-@app.route("/api/export/pdf", methods=["GET"])
-def export_pdf():
-
-    if not HISTORY:
-        return jsonify({"error": "No data available"}), 400
-
-    report = get_report().json
-
-    buffer = io.BytesIO()
-
-    p = canvas.Canvas(buffer, pagesize=A4)
-
-    y = 800
-
-    p.drawString(50, y, "InfraSense Structural Monitoring Report")
-    y -= 30
-
-    p.drawString(50, y, f"Device ID: {DEVICE_ID}")
-    y -= 20
-
-    p.drawString(50, y, f"Zone: {ZONE}")
-    y -= 20
-
-    p.drawString(50, y, f"Generated On: {get_utc_now().isoformat()}")
-    y -= 30
-
-    p.drawString(50, y, f"Overall Status: {report['status']}")
-    y -= 20
-
-    p.drawString(50, y, f"Summary: {report['summary']}")
-    y -= 20
-
-    p.drawString(50, y, f"Advice: {report['advice']}")
-    y -= 30
-
-    p.drawString(50, y, "History Data:")
-    y -= 20
-
-    for d in HISTORY:
-
-        line = f"{d['time']} | S:{d['strain']} | V:{d['vibration']} | T:{d['temperature']} | H:{d['humidity']} | C:{d['crack']}"
-
-        p.drawString(50, y, line)
-
-        y -= 15
-
-        if y < 50:
-            p.showPage()
-            y = 800
-
-    p.save()
-
-    buffer.seek(0)
-
-    return Response(
-        buffer,
-        mimetype='application/pdf',
-        headers={
-            "Content-Disposition": "attachment;filename=infrasense_full_report.pdf"
-        }
-    )
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
