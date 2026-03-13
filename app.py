@@ -309,37 +309,93 @@ def get_report():
         return jsonify({
             "status": "NO DATA",
             "summary": "No monitoring data available.",
-            "advice": "Start device to generate report."
+            "advice": "Start a monitoring session and collect sensor data to generate analysis."
         })
 
-    warnings = 0
-    critical = 0
+    # Analyze sensor readings for comprehensive assessment
+    strain_values = [d["strain"] for d in HISTORY if d["strain"] is not None]
+    vibration_values = [d["vibration"] for d in HISTORY if d["vibration"] is not None]
+    temperature_values = [d["temperature"] for d in HISTORY if d["temperature"] is not None]
+    humidity_values = [d["humidity"] for d in HISTORY if d["humidity"] is not None]
+    crack_values = [d["crack"] for d in HISTORY if d["crack"] is not None]
 
-    for d in HISTORY:
+    # Count critical and warning conditions
+    critical_count = 0
+    warning_count = 0
+    
+    analysis_details = []
 
-        if d["crack"] > 0.5:
-            critical += 1
+    # Strain analysis
+    if strain_values:
+        avg_strain = sum(strain_values) / len(strain_values)
+        max_strain = max(strain_values)
+        if max_strain > 350:
+            critical_count += 1
+            analysis_details.append(f"Critical strain levels detected (max: {max_strain:.1f} με)")
+        elif max_strain > 250:
+            warning_count += 1
+            analysis_details.append(f"Elevated strain levels observed (max: {max_strain:.1f} με)")
 
-        if d["strain"] > 300 or d["humidity"] > 80:
-            warnings += 1
+    # Vibration analysis
+    if vibration_values:
+        avg_vibration = sum(vibration_values) / len(vibration_values)
+        max_vibration = max(vibration_values)
+        if max_vibration > 0.08:
+            critical_count += 1
+            analysis_details.append(f"Critical vibration detected (max: {max_vibration:.3f} g)")
+        elif max_vibration > 0.05:
+            warning_count += 1
+            analysis_details.append(f"Elevated vibration levels (max: {max_vibration:.3f} g)")
 
-    if critical > 5:
+    # Temperature analysis
+    if temperature_values:
+        avg_temp = sum(temperature_values) / len(temperature_values)
+        max_temp = max(temperature_values)
+        if max_temp > 45:
+            critical_count += 1
+            analysis_details.append(f"High temperature detected (max: {max_temp:.1f} °C)")
+        elif max_temp > 35:
+            warning_count += 1
+            analysis_details.append(f"Elevated temperature (max: {max_temp:.1f} °C)")
 
+    # Humidity analysis
+    if humidity_values:
+        avg_humidity = sum(humidity_values) / len(humidity_values)
+        max_humidity = max(humidity_values)
+        if max_humidity > 85:
+            critical_count += 1
+            analysis_details.append(f"Critical humidity levels (max: {max_humidity:.1f} %)")
+        elif max_humidity > 70:
+            warning_count += 1
+            analysis_details.append(f"High humidity conditions (max: {max_humidity:.1f} %)")
+
+    # Crack analysis
+    if crack_values:
+        max_crack = max(crack_values)
+        if max_crack > 0.5:
+            critical_count += 1
+            analysis_details.append(f"Critical crack width detected (max: {max_crack:.3f} mm)")
+        elif max_crack > 0.3:
+            warning_count += 1
+            analysis_details.append(f"Crack formation observed (max: {max_crack:.3f} mm)")
+
+    # Determine overall status and generate detailed advice
+    if critical_count > 0:
         status = "CRITICAL"
-        summary = "Severe structural distress detected."
-        advice = "Immediate inspection recommended."
-
-    elif warnings > 5:
-
+        summary = f"Severe structural issues detected: {critical_count} critical parameter(s). {'. '.join(analysis_details[:2])}"
+        advice = "IMMEDIATE ACTION REQUIRED: 1) Conduct thorough structural inspection 2) Implement safety measures 3) Consult structural engineer 4) Consider load reduction 5) Continuous monitoring essential"
+    elif warning_count > 2:
         status = "WARNING"
-        summary = "Early structural degradation signs observed."
-        advice = "Schedule preventive maintenance."
-
+        summary = f"Multiple structural concerns identified: {warning_count} parameter(s) showing stress. {'. '.join(analysis_details[:2])}"
+        advice = "PREVENTIVE ACTION NEEDED: 1) Schedule detailed inspection within 48 hours 2) Increase monitoring frequency 3) Review maintenance records 4) Check for environmental factors 5) Plan remedial measures"
+    elif warning_count > 0:
+        status = "WARNING"
+        summary = f"Early structural degradation signs: {warning_count} parameter(s) require attention. {analysis_details[0] if analysis_details else 'Minor anomalies detected'}"
+        advice = "MONITORING ADVISED: 1) Continue regular monitoring 2) Document trends 3) Schedule routine inspection 4) Review operational loads 5) Maintain observation log"
     else:
-
         status = "SAFE"
-        summary = "Structure performing within acceptable limits."
-        advice = "Continue routine monitoring."
+        summary = f"Structure performing within acceptable limits. All {len(HISTORY)} sensor readings normal."
+        advice = "ROUTINE MONITORING: 1) Continue standard monitoring schedule 2) Maintain calibration of sensors 3) Regular visual inspections 4) Document baseline readings 5) Plan periodic assessments"
 
     return jsonify({
         "building": SESSION["building"],
@@ -352,7 +408,7 @@ def get_report():
 # ==============================
 # EXPORT CSV
 # ==============================
-
+# ... (rest of the code remains the same)
 @app.route("/api/export/csv", methods=["GET"])
 def export_csv():
 
