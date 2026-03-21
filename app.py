@@ -406,9 +406,21 @@ def get_report():
     })
 
 # ==============================
+# TIME FORMATTING FUNCTIONS
+# ==============================
+
+def format_time_for_export(iso_time):
+    """Convert ISO time to time-only format for exports"""
+    try:
+        dt = datetime.datetime.fromisoformat(iso_time.replace('Z', '+00:00'))
+        return dt.strftime("%I:%M:%S %p")
+    except:
+        return iso_time
+
+# ==============================
 # EXPORT CSV
 # ==============================
-# ... (rest of the code remains the same)
+
 @app.route("/api/export/csv", methods=["GET"])
 def export_csv():
 
@@ -424,7 +436,7 @@ def export_csv():
     writer.writerow(["Device ID", DEVICE_ID])
     writer.writerow(["Building", report["building"]])
     writer.writerow(["Zone", report["zone"]])
-    writer.writerow(["Generated On", get_utc_now().isoformat()])
+    writer.writerow(["Generated On", format_time_for_export(get_utc_now().isoformat())])
     writer.writerow(["Overall Status", report["status"]])
     writer.writerow(["Summary", report["summary"]])
     writer.writerow(["Advice", report["advice"]])
@@ -434,7 +446,7 @@ def export_csv():
 
     for d in HISTORY:
         writer.writerow([
-            d["time"],
+            format_time_for_export(d["time"]),
             d["strain"],
             d["vibration"],
             d["temperature"],
@@ -444,6 +456,156 @@ def export_csv():
 
     response = Response(output.getvalue(), mimetype="text/csv")
     response.headers["Content-Disposition"] = "attachment; filename=infrasense_report.csv"
+
+    return response
+
+# ==============================
+# EXPORT TEXT
+# ==============================
+
+@app.route("/api/export/text", methods=["GET"])
+def export_text():
+
+    if not HISTORY:
+        return jsonify({"error": "No data available"}), 400
+
+    report = get_report().json
+
+    output = io.StringIO()
+    
+    output.write("INFRASTRUCTURAL MONITORING REPORT\n")
+    output.write("=" * 50 + "\n\n")
+    
+    output.write(f"Device ID: {DEVICE_ID}\n")
+    output.write(f"Building: {report['building']}\n")
+    output.write(f"Zone: {report['zone']}\n")
+    output.write(f"Generated On: {format_time_for_export(get_utc_now().isoformat())}\n")
+    output.write(f"Overall Status: {report['status']}\n\n")
+    
+    output.write("SUMMARY\n")
+    output.write("-" * 20 + "\n")
+    output.write(f"{report['summary']}\n\n")
+    
+    output.write("ADVICE\n")
+    output.write("-" * 20 + "\n")
+    output.write(f"{report['advice']}\n\n")
+    
+    output.write("HISTORICAL DATA\n")
+    output.write("-" * 20 + "\n")
+    output.write(f"{'Time':<15} {'Strain':<10} {'Vibration':<12} {'Temperature':<12} {'Humidity':<10} {'Crack':<10}\n")
+    output.write("-" * 80 + "\n")
+    
+    for d in HISTORY:
+        output.write(f"{format_time_for_export(d['time']):<15} {d['strain']:<10.2f} {d['vibration']:<12.3f} {d['temperature']:<12.2f} {d['humidity']:<10.1f} {d['crack']:<10.3f}\n")
+
+    response = Response(output.getvalue(), mimetype="text/plain")
+    response.headers["Content-Disposition"] = "attachment; filename=infrasense_report.txt"
+
+    return response
+
+# ==============================
+# EXPORT PDF
+# ==============================
+
+@app.route("/api/export/pdf", methods=["GET"])
+def export_pdf():
+
+    if not HISTORY:
+        return jsonify({"error": "No data available"}), 400
+
+    report = get_report().json
+
+    buffer = io.BytesIO()
+    p = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+
+    # Title
+    p.setFont("Helvetica-Bold", 16)
+    p.drawString(50, height - 50, "InfraSense Structural Monitoring Report")
+    
+    # Report Info
+    p.setFont("Helvetica", 12)
+    y_position = height - 100
+    p.drawString(50, y_position, f"Device ID: {DEVICE_ID}")
+    y_position -= 20
+    p.drawString(50, y_position, f"Building: {report['building']}")
+    y_position -= 20
+    p.drawString(50, y_position, f"Zone: {report['zone']}")
+    y_position -= 20
+    p.drawString(50, y_position, f"Generated On: {format_time_for_export(get_utc_now().isoformat())}")
+    y_position -= 20
+    p.drawString(50, y_position, f"Overall Status: {report['status']}")
+    
+    # Summary
+    y_position -= 40
+    p.setFont("Helvetica-Bold", 14)
+    p.drawString(50, y_position, "Summary:")
+    y_position -= 20
+    p.setFont("Helvetica", 10)
+    
+    # Wrap summary text
+    summary_lines = report['summary'].split('. ')
+    for line in summary_lines:
+        if line.strip():
+            p.drawString(50, y_position, line.strip() + '.')
+            y_position -= 15
+            if y_position < 100:
+                p.showPage()
+                y_position = height - 50
+    
+    # Advice
+    y_position -= 20
+    p.setFont("Helvetica-Bold", 14)
+    p.drawString(50, y_position, "Advice:")
+    y_position -= 20
+    p.setFont("Helvetica", 10)
+    
+    # Wrap advice text
+    advice_lines = report['advice'].split('. ')
+    for line in advice_lines:
+        if line.strip():
+            p.drawString(50, y_position, line.strip() + '.')
+            y_position -= 15
+            if y_position < 100:
+                p.showPage()
+                y_position = height - 50
+    
+    # Historical Data Table Header
+    y_position -= 30
+    p.setFont("Helvetica-Bold", 12)
+    p.drawString(50, y_position, "Historical Data:")
+    y_position -= 20
+    
+    # Table headers
+    p.setFont("Helvetica-Bold", 9)
+    p.drawString(50, y_position, "Time")
+    p.drawString(120, y_position, "Strain")
+    p.drawString(180, y_position, "Vibration")
+    p.drawString(250, y_position, "Temperature")
+    p.drawString(340, y_position, "Humidity")
+    p.drawString(420, y_position, "Crack")
+    y_position -= 15
+    
+    # Table data
+    p.setFont("Helvetica", 8)
+    for d in HISTORY:
+        if y_position < 50:
+            p.showPage()
+            y_position = height - 50
+        
+        p.drawString(50, y_position, format_time_for_export(d['time']))
+        p.drawString(120, y_position, f"{d['strain']:.2f}")
+        p.drawString(180, y_position, f"{d['vibration']:.3f}")
+        p.drawString(250, y_position, f"{d['temperature']:.2f}")
+        p.drawString(340, y_position, f"{d['humidity']:.1f}")
+        p.drawString(420, y_position, f"{d['crack']:.3f}")
+        y_position -= 12
+
+    p.save()
+    buffer.seek(0)
+
+    response = Response(buffer.getvalue(), mimetype="application/pdf")
+    response.headers["Content-Disposition"] = "attachment; filename=infrasense_report.pdf"
 
     return response
 
