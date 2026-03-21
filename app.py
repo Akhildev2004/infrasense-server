@@ -410,7 +410,7 @@ def get_report():
 # ==============================
 
 def format_time_for_export(iso_time):
-    """Convert ISO time to local time-only format for exports (CSV-safe format)"""
+    """Convert ISO time to local time-only format for exports (matches frontend exactly)"""
     try:
         # Parse the ISO time string to datetime object
         if iso_time.endswith('Z'):
@@ -421,12 +421,18 @@ def format_time_for_export(iso_time):
             dt = datetime.datetime.fromisoformat(iso_time)
             dt = dt.replace(tzinfo=datetime.timezone.utc)
         
-        # Convert to system local time
+        # Convert to system local time (same as JavaScript new Date())
         local_dt = dt.astimezone()
         
-        # Format for CSV compatibility - use 24-hour format to avoid Excel issues
-        # Format: "16:54:30" (24-hour format, no AM/PM)
-        return f"{local_dt.hour:02d}:{local_dt.minute:02d}:{local_dt.second:02d}"
+        # Format to match frontend display - use 12-hour format like frontend
+        hour_12 = local_dt.hour % 12
+        if hour_12 == 0:
+            hour_12 = 12
+            
+        am_pm = "AM" if local_dt.hour < 12 else "PM"
+        
+        # Return in 12-hour format for Text and PDF, but 24-hour for CSV to avoid Excel issues
+        return f"{hour_12}:{local_dt.minute:02d}:{local_dt.second:02d} {am_pm}"
         
     except Exception as e:
         # Enhanced fallback for debugging
@@ -436,8 +442,18 @@ def format_time_for_export(iso_time):
                 time_part = iso_time.split('T')[1]
                 time_part = time_part.split('.')[0].split('Z')[0].split('+')[0]
                 if len(time_part) >= 8:
-                    # Return in 24-hour format for CSV compatibility
-                    return time_part[:8]  # "HH:MM:SS" format
+                    # Extract time and convert to 12-hour format
+                    hour = int(time_part[:2])
+                    minute = int(time_part[3:5])
+                    second = int(time_part[6:8])
+                    
+                    hour_12 = hour % 12
+                    if hour_12 == 0:
+                        hour_12 = 12
+                        
+                    am_pm = "AM" if hour < 12 else "PM"
+                    
+                    return f"{hour_12}:{minute:02d}:{second:02d} {am_pm}"
             return str(iso_time)
         except:
             return f"TIME_ERROR: {iso_time}"
