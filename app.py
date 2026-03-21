@@ -412,20 +412,31 @@ def get_report():
 def format_time_for_export(iso_time):
     """Convert ISO time to time-only format for exports"""
     try:
-        # Handle different ISO time formats
+        # Parse the ISO time string
         if iso_time.endswith('Z'):
+            # Remove Z and add UTC timezone
             dt = datetime.datetime.fromisoformat(iso_time.replace('Z', '+00:00'))
         elif '+' in iso_time:
+            # Already has timezone info
             dt = datetime.datetime.fromisoformat(iso_time)
         else:
+            # No timezone, assume UTC
             dt = datetime.datetime.fromisoformat(iso_time)
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        
+        # Convert to local time for display (or keep UTC if preferred)
+        # For now, let's display in UTC
         return dt.strftime("%I:%M:%S %p")
-    except:
-        # Fallback: try to parse as string and extract time part
+        
+    except Exception as e:
+        # Fallback: try to extract time part directly
         try:
             if 'T' in iso_time:
-                time_part = iso_time.split('T')[1].split('.')[0].split('Z')[0]
+                time_part = iso_time.split('T')[1]
+                # Remove microseconds and timezone
+                time_part = time_part.split('.')[0].split('Z')[0].split('+')[0]
                 if len(time_part) >= 8:
+                    # Parse the time part
                     time_obj = datetime.datetime.strptime(time_part[:8], "%H:%M:%S")
                     return time_obj.strftime("%I:%M:%S %p")
             return str(iso_time)
