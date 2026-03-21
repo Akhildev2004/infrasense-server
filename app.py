@@ -410,7 +410,7 @@ def get_report():
 # ==============================
 
 def format_time_for_export(iso_time):
-    """Convert ISO time to time-only format for exports"""
+    """Convert ISO time to local time-only format for exports (matches frontend formatShortTime)"""
     try:
         # Parse the ISO time string
         if iso_time.endswith('Z'):
@@ -424,9 +424,9 @@ def format_time_for_export(iso_time):
             dt = datetime.datetime.fromisoformat(iso_time)
             dt = dt.replace(tzinfo=datetime.timezone.utc)
         
-        # Convert to local time for display (or keep UTC if preferred)
-        # For now, let's display in UTC
-        return dt.strftime("%I:%M:%S %p")
+        # Convert to local time (matches frontend d.toLocaleTimeString())
+        local_dt = dt.astimezone()
+        return local_dt.strftime("%I:%M:%S %p")
         
     except Exception as e:
         # Fallback: try to extract time part directly
@@ -436,7 +436,7 @@ def format_time_for_export(iso_time):
                 # Remove microseconds and timezone
                 time_part = time_part.split('.')[0].split('Z')[0].split('+')[0]
                 if len(time_part) >= 8:
-                    # Parse the time part
+                    # Parse the time part and convert to local time format
                     time_obj = datetime.datetime.strptime(time_part[:8], "%H:%M:%S")
                     return time_obj.strftime("%I:%M:%S %p")
             return str(iso_time)
