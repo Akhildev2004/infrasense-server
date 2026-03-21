@@ -412,10 +412,25 @@ def get_report():
 def format_time_for_export(iso_time):
     """Convert ISO time to time-only format for exports"""
     try:
-        dt = datetime.datetime.fromisoformat(iso_time.replace('Z', '+00:00'))
+        # Handle different ISO time formats
+        if iso_time.endswith('Z'):
+            dt = datetime.datetime.fromisoformat(iso_time.replace('Z', '+00:00'))
+        elif '+' in iso_time:
+            dt = datetime.datetime.fromisoformat(iso_time)
+        else:
+            dt = datetime.datetime.fromisoformat(iso_time)
         return dt.strftime("%I:%M:%S %p")
     except:
-        return iso_time
+        # Fallback: try to parse as string and extract time part
+        try:
+            if 'T' in iso_time:
+                time_part = iso_time.split('T')[1].split('.')[0].split('Z')[0]
+                if len(time_part) >= 8:
+                    time_obj = datetime.datetime.strptime(time_part[:8], "%H:%M:%S")
+                    return time_obj.strftime("%I:%M:%S %p")
+            return str(iso_time)
+        except:
+            return str(iso_time)
 
 # ==============================
 # EXPORT CSV
