@@ -410,38 +410,37 @@ def get_report():
 # ==============================
 
 def format_time_for_export(iso_time):
-    """Convert ISO time to local time-only format for exports (matches frontend formatShortTime)"""
+    """Convert ISO time to local time-only format for exports (CSV-safe format)"""
     try:
-        # Parse the ISO time string
+        # Parse the ISO time string to datetime object
         if iso_time.endswith('Z'):
-            # Remove Z and add UTC timezone
             dt = datetime.datetime.fromisoformat(iso_time.replace('Z', '+00:00'))
         elif '+' in iso_time:
-            # Already has timezone info
             dt = datetime.datetime.fromisoformat(iso_time)
         else:
-            # No timezone, assume UTC
             dt = datetime.datetime.fromisoformat(iso_time)
             dt = dt.replace(tzinfo=datetime.timezone.utc)
         
-        # Convert to local time (matches frontend d.toLocaleTimeString())
+        # Convert to system local time
         local_dt = dt.astimezone()
-        return local_dt.strftime("%I:%M:%S %p")
+        
+        # Format for CSV compatibility - use 24-hour format to avoid Excel issues
+        # Format: "16:54:30" (24-hour format, no AM/PM)
+        return f"{local_dt.hour:02d}:{local_dt.minute:02d}:{local_dt.second:02d}"
         
     except Exception as e:
-        # Fallback: try to extract time part directly
+        # Enhanced fallback for debugging
         try:
+            print(f"Time parsing error for: {iso_time}, error: {e}")
             if 'T' in iso_time:
                 time_part = iso_time.split('T')[1]
-                # Remove microseconds and timezone
                 time_part = time_part.split('.')[0].split('Z')[0].split('+')[0]
                 if len(time_part) >= 8:
-                    # Parse the time part and convert to local time format
-                    time_obj = datetime.datetime.strptime(time_part[:8], "%H:%M:%S")
-                    return time_obj.strftime("%I:%M:%S %p")
+                    # Return in 24-hour format for CSV compatibility
+                    return time_part[:8]  # "HH:MM:SS" format
             return str(iso_time)
         except:
-            return str(iso_time)
+            return f"TIME_ERROR: {iso_time}"
 
 # ==============================
 # EXPORT CSV
